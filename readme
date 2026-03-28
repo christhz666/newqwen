@@ -1,3 +1,32 @@
+
+# MediFlow OSS Web Demo
+
+Aplicación web demo (frontend) para flujo de clínica/hospital con:
+
+- Registro de pacientes (cédula opcional para menores).
+- Facturación por sucursal con ID de factura de **4–5 dígitos**.
+- Selección de estudios ligados a la factura/orden.
+- Búsqueda de resultados por factura+sucursal o por nombre (histórico).
+- Bloqueo de entrega si la factura tiene saldo pendiente.
+- Búsqueda por **barcode** y **QR** independientes del ID de factura.
+- Gestión básica de sucursales, roles y usuarios.
+- Branding editable (logo, título, subtítulo).
+
+## Ejecutar
+
+```bash
+cd web
+python3 -m http.server 8080
+```
+
+Luego abre: `http://localhost:8080`
+
+## Archivos
+
+- `web/index.html`: estructura visual de módulos (Dashboard, Recepción, Resultados, Admin, Portal paciente).
+- `web/styles.css`: diseño moderno tipo glassmorphism responsive.
+- `web/app.js`: lógica de negocio en cliente con almacenamiento local (`localStorage`).
+
 # Plataforma Integral Open Source para Clínicas/Hospitales
 
 > **Rol asumido:** Arquitectura de Software Senior + HealthTech.
