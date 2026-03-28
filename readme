@@ -1,1 +1,308 @@
-hi 
+# Plataforma Integral Open Source para Clínicas/Hospitales
+
+> **Rol asumido:** Arquitectura de Software Senior + HealthTech.
+> **Enfoque:** máxima reutilización de software open source robusto, desarrollo mínimo de “pegamento” e integración.
+
+---
+
+## 1) Stack Open Source Definitivo (sin contenedores)
+
+### 1.1 Núcleo clínico / HIS + Facturación
+
+**Odoo Community (Python/PostgreSQL)** como núcleo administrativo-financiero + módulo clínico custom liviano.
+
+**¿Por qué Odoo Community?**
+- ERP maduro para ciclo de ingresos: cotización, factura, cuentas por cobrar, pagos parciales, reportes.
+- Muy flexible para seguros, convenios y reglas de cobertura.
+- Multi-sucursal (multi-company / branches) y control de permisos por roles.
+- UI web moderna para un frontend elegante sin construir todo desde cero.
+
+> Alternativa si quieres enfoque hospitalario puro: **GNU Health** + módulo financiero externo; pero para facturación/AR compleja por seguros locales suele ser más rápido Odoo.
+
+### 1.2 PACS/RIS e imágenes médicas
+
+- **PACS:** **Orthanc**
+- **Visor DICOM Web embebible:** **OHIF Viewer**
+
+**¿Por qué este combo?**
+- Orthanc es ligero, estable y excelente para integración vía REST + DICOM/DICOMweb.
+- OHIF se integra por URL/iframe y consume DICOMweb (WADO-RS/QIDO-RS/STOW-RS).
+- Escala bien para múltiples modalidades (RX, US, CT, MR).
+
+> Si necesitas alto volumen enterprise y workflows RIS más complejos, evaluar dcm4chee en fase 2.
+
+### 1.3 LIS (Laboratorio) e instrumentación
+
+- **LIS recomendado:** **OpenELIS Global** (o **Bika/Senaite** como plan B si tu operación se adapta mejor).
+- **Interfaz de equipos:** middleware de mensajería HL7 + driver por analizador (ASTM/HL7/serial/TCP).
+- **Bus de interoperabilidad:** **Mirth Connect (NextGen Connect, open source)**.
+
+**¿Por qué OpenELIS + Mirth?**
+- OpenELIS está orientado a flujo real de laboratorio.
+- Mirth es estándar de facto para transformar mensajes de equipos/LIS/HIS.
+- Te permite escalar de 1 a N analizadores sin rehacer todo.
+
+### 1.4 Motor de identidad clínica e interoperabilidad
+
+- **Master Patient Index (MPI) lógico** dentro del núcleo (Odoo + tabla paciente maestra).
+- **Servicio FHIR** (HAPI FHIR opcional) para exponer recursos Patient/Encounter/DiagnosticReport/Observation.
+- **Mensajería transaccional interna:** REST + eventos (webhooks/callbacks).
+
+### 1.5 Base de datos y componentes base
+
+- **PostgreSQL** (principal)
+- **Redis** (colas/caché opcional)
+- **Nginx** como reverse proxy + TLS
+- **Keycloak** opcional para SSO/RBAC avanzado
+
+---
+
+## 2) Modelo de negocio solicitado: ID por factura + sucursal + trazabilidad total
+
+## 2.1 Identificadores
+
+Se deben manejar 4 identificadores distintos:
+
+1. **PatientID (global):** identifica a la persona (nombre, cédula/pasaporte/opcional “menor”).
+2. **BranchScopedInvoiceID (4–5 dígitos):** identificador visible de factura por sucursal.
+   - Ej.: sucursal A: 5021 y sucursal B: 5021 pueden coexistir.
+3. **OrderID clínico interno (UUID):** llave técnica única global para evitar colisiones.
+4. **TokenQR / BarcodeValue:** códigos independientes del InvoiceID para búsqueda rápida.
+
+> Regla clave: **los estudios entregables se determinan por la orden/factura**, no solo por nombre de paciente.
+
+## 2.2 Ejemplo exacto (tu caso)
+
+- Paciente “Pepito” en sucursal STO emite factura **5021** con estudios: Orina + Coprológico.
+- El sistema crea OrderID interno (UUID) ligado a factura 5021/STO.
+- LIS solo recibe esos dos tests para esa orden.
+- Al buscar por **InvoiceID=5021 + sucursal=STO**, solo aparecen esos dos resultados.
+- Al buscar por **nombre de paciente**, se listan todos sus resultados históricos (más reciente → más antiguo).
+
+## 2.3 Estructura mínima de datos
+
+- `branch(id, code, name, status)`
+- `patient(id, document_type, document_number nullable, full_name, dob, minor_flag)`
+- `encounter(id, patient_id, branch_id, datetime)`
+- `invoice(id, branch_id, branch_invoice_number, patient_id, status, total, balance)`
+- `order(id_uuid, invoice_id, status)`
+- `order_item(id, order_id, service_code, service_name, department[LIS|PACS|CONSULTA], status)`
+- `result_release_policy(id, invoice_id, hold_if_balance_gt_0)`
+- `barcode_qr_token(id, invoice_id/order_id, barcode, qr_token, active)`
+
+Índice único recomendado:
+- `UNIQUE(branch_id, branch_invoice_number)`
+
+---
+
+## 3) Arquitectura de integración (cómo “hablan” los sistemas)
+
+```mermaid
+flowchart LR
+    A[Frontend Web: Recepción/Doctor/Admin/Paciente] --> B[Core HIS+Billing Odoo]
+    B -->|API REST| C[Integration Layer]
+    C -->|HL7 ORM/ORU| D[Mirth Connect]
+    D --> E[OpenELIS LIS]
+    D --> F[Instrumentos de laboratorio]
+    C -->|DICOM C-STORE / DICOMweb| G[Orthanc PACS]
+    A -->|Embed Viewer| H[OHIF Viewer]
+    H --> G
+    B -->|Estado de pago| C
+    C -->|Bloqueo/permiso de entrega| E
+```
+
+### 3.1 Flujo: facturación → laboratorio
+
+1. Recepción registra/selecciona paciente (permitir menor sin cédula obligatoria).
+2. Selecciona estudios.
+3. Sistema factura y genera `branch_invoice_number` (4–5 dígitos por sucursal).
+4. Integration Layer emite orden LIS (HL7 ORM o REST según capacidad del LIS).
+5. LIS crea muestras/etiquetas y enruta a analizadores.
+
+### 3.2 Flujo: resultados → validación → entrega
+
+1. Analizador devuelve resultados (ASTM/HL7) al middleware.
+2. Mirth transforma y entrega a LIS.
+3. LIS valida técnicamente; envía resultado final al Core (HL7 ORU / REST).
+4. Core verifica estado financiero:
+   - Si saldo pendiente > 0: **bloquear entrega** y mostrar alerta a recepcionista / paciente web.
+   - Si saldo = 0: habilitar entrega/impresión.
+
+### 3.3 Flujo: imágenes
+
+1. Facturación de estudio de imagen crea orden PACS.
+2. Modalidad envía DICOM a Orthanc.
+3. Radiólogo y clínico visualizan en OHIF embebido.
+4. Informe radiológico retorna al Core como documento clínico/facturable.
+
+---
+
+## 4) Gestión de equipos de laboratorio (analizadores físicos)
+
+## 4.1 Patrón recomendado por capa
+
+- **Capa 1 (Equipo):** conexión ASTM, HL7, RS-232, TCP/IP o driver propietario.
+- **Capa 2 (Middleware de instrumentos):** normaliza mensajes y mapea códigos de prueba.
+- **Capa 3 (Mirth):** transforma y enruta a OpenELIS.
+- **Capa 4 (LIS):** validación técnica + reglas de delta check + flags críticos.
+- **Capa 5 (Core/Billing):** consume resultado validado para liberar/retener entrega.
+
+## 4.2 Requisitos por analizador (checklist)
+
+- Protocolo soportado (ASTM E1381/E1394, HL7, API).
+- Tipo de enlace (serial/ethernet).
+- Tabla de mapeo `codigo_equipo -> codigo_LIS`.
+- Pruebas de ida (orden) y vuelta (resultado).
+- Manejo de repeticiones, correcciones y resultados críticos.
+- Registro de auditoría por muestra y operador.
+
+## 4.3 Regla de robustez operacional
+
+- Nunca permitir resultado “huérfano” sin `order_id` válido.
+- Todo resultado debe registrar: `branch_id`, `invoice_id`, `order_item_id`, `analyzer_id`, `timestamp`.
+
+---
+
+## 5) Roles, seguridad y administración multi-sucursal
+
+## 5.1 RBAC dinámico
+
+Roles base:
+- **Super Admin (root inicial)**
+- Admin de red / TI
+- Admin de sucursal
+- Recepción/Caja
+- Bacteriólogo/Técnico
+- Radiólogo
+- Médico tratante
+- Auditor
+
+Cada rol con permisos por módulo + por sucursal + por acción (crear/ver/validar/imprimir/anular).
+
+## 5.2 Superusuario de instalación (lo que pediste)
+
+- En primer arranque, crear **usuario root local** (credenciales temporales forzadas a cambio).
+- Root configura conexión DB y parámetros iniciales.
+- Luego crea usuarios y roles por sucursal.
+
+## 5.3 Multi-tenant / multi-centro
+
+Para dar servicio a varios centros:
+- Opción A: **una base por centro** (máximo aislamiento, recomendado en salud).
+- Opción B: una base multi-tenant con segregación fuerte por `tenant_id`.
+
+Recomendación: empezar con **base por centro** por simplicidad legal y operativa.
+
+---
+
+## 6) Factura con QR + código de barras + experiencia operativa
+
+## 6.1 Comportamiento requerido
+
+- Factura imprime:
+  - InvoiceID visible (4–5 dígitos + sucursal)
+  - Código de barras (Code128 recomendado)
+  - QR firmado (token no predecible)
+
+## 6.2 Búsqueda y retiro
+
+- **Escaneo de barcode** (cualquier módulo):
+  - abre modal no intrusivo (sin perder pantalla actual)
+  - opciones: Vista previa / Imprimir / Enviar PDF
+- **Escaneo de QR paciente web:**
+  - muestra resultados si saldo=0
+  - si hay deuda: pantalla elegante con CTA de pago
+
+## 6.3 Regla de bloqueo financiero
+
+- No liberar resultados si `balance > 0` (excepto permiso explícito de rol autorizado).
+- Registrar quién forzó la excepción y por qué.
+
+---
+
+## 7) Frontend “bonito” y moderno (sin reinventar todo)
+
+## 7.1 Estrategia UI
+
+- Base: frontend web de Odoo + portal paciente.
+- Si deseas capa visual superior:
+  - **Next.js + Tailwind + shadcn/ui** para portal de pacientes y dashboards ejecutivos.
+  - Consumir APIs del Core, LIS y PACS vía Integration Layer.
+
+## 7.2 Buenas prácticas UX avanzadas
+
+- Diseño system con tokens (color, tipografía, espaciado).
+- Componentes accesibles (WCAG AA).
+- Estados de carga y vacíos claros.
+- “Command palette” para personal interno.
+- Escaneo universal (atajo teclado + lector) en modal flotante persistente.
+
+---
+
+## 8) Plan de implementación realista (roadmap)
+
+## Fase 0 — Descubrimiento (2–3 semanas)
+- Levantamiento de procesos actuales por sucursal.
+- Catálogo maestro de estudios (LIS/PACS/facturación).
+- Matriz de aseguradoras y reglas de cobertura/copago.
+
+## Fase 1 — Base operativa (4–6 semanas)
+- Instalar PostgreSQL + Odoo + Orthanc + OHIF + OpenELIS + Mirth (en servidores Linux, sin contenedores).
+- Configurar sucursales, usuarios, roles, facturación base.
+- Definir esquema de IDs por sucursal (4–5 dígitos).
+
+## Fase 2 — Integración clínica-financiera (6–8 semanas)
+- Construir Integration Layer (REST + HL7).
+- Flujo completo: factura -> orden -> resultado -> validación -> entrega.
+- Implementar bloqueo por saldo pendiente.
+
+## Fase 3 — Equipos de laboratorio (4–10 semanas según cantidad)
+- Integrar analizadores prioritarios.
+- Mapeo de pruebas, calibración de colas y reintentos.
+- Validación paralela contra operación manual.
+
+## Fase 4 — Portal paciente + QR/Barcode (3–5 semanas)
+- Entrega digital de resultados.
+- Mensajería de deuda y pasarela de pagos futura (tarjeta/PayPal).
+- Auditoría y bitácoras de acceso.
+
+## Fase 5 — Endurecimiento y escalado (continuo)
+- Hardening de seguridad, backups, DRP.
+- Observabilidad (logs, métricas, alertas).
+- Mesa de ayuda y mejora continua.
+
+---
+
+## 9) Interoperabilidad: estándares recomendados en práctica
+
+- **HL7 v2**: órdenes/resultados de laboratorio (ORM/ORU).
+- **FHIR R4**: interoperabilidad moderna para apps y portal paciente.
+- **DICOM/DICOMweb**: imágenes médicas y visualización web.
+- **REST**: orquestación de negocio y consultas internas.
+
+Regla práctica:
+- Donde el sistema legacy hable HL7 v2 → usar Mirth.
+- Donde necesites app moderna/portal externo → exponer FHIR/REST.
+
+---
+
+## 10) Qué te agrego yo (recomendaciones críticas)
+
+1. **Gobernanza de catálogo de estudios** (códigos únicos por servicio).
+2. **Política formal de identificación de paciente** para evitar duplicados.
+3. **Auditoría legal y trazabilidad** (quién vio/imprimió/entregó resultados).
+4. **Plan de continuidad operativa** (caída de internet/servidor/sucursal).
+5. **Estrategia de migración de datos históricos** desde sistemas actuales.
+6. **KPIs ejecutivos**: TAT de laboratorio, cartera vencida, % rechazos de muestra, productividad por sucursal.
+
+---
+
+## 11) Respuesta directa a tu pregunta final
+
+Sí: **agregaría desde el día 1** un módulo de **calidad y trazabilidad** (control de muestras, incidencias, auditoría y tableros), porque en salud eso te evita errores clínicos, problemas legales y pérdida de ingresos.
+
+Si quieres, en el siguiente paso te puedo entregar:
+- **modelo ER detallado**,
+- **catálogo inicial de APIs** (endpoints exactos),
+- **diccionario HL7/FHIR mínimo viable**,
+- y una **plantilla de backlog por sprints** lista para ejecutar con tu equipo.
