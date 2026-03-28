@@ -1,1 +1,34 @@
-hi 
+# MediFlow OSS (Funcional)
+
+Esta versión ya no es solo demo estática: incluye **backend real** con API REST y base SQLite persistente.
+
+## Qué incluye
+
+- Backend Python (`server.py`) con endpoints para:
+  - bootstrap de datos,
+  - creación de factura+orden,
+  - búsqueda de pacientes,
+  - consulta de resultados por factura+sucursal, nombre o token (QR/barcode),
+  - validación de entrega por balance,
+  - administración de sucursales/roles/usuarios/branding.
+- Frontend web (`web/`) conectado al backend por `fetch`.
+- Persistencia en archivo `mediflow.db`.
+
+## Ejecutar
+
+```bash
+python3 server.py
+```
+
+Abrir en navegador: `http://localhost:8080`
+
+## Estructura
+
+- `server.py`: servidor HTTP + API REST + SQLite.
+- `web/index.html`: interfaz de módulos.
+- `web/styles.css`: estilos responsivos.
+- `web/app.js`: lógica de frontend consumiendo API.
+
+## Nota
+
+Para un entorno clínico de producción aún faltaría endurecimiento (autenticación avanzada, auditoría regulatoria completa, cifrado/backup/DR, integraciones HL7/FHIR/DICOM reales), pero la app ya funciona end-to-end con backend y persistencia.
