@@ -19,6 +19,11 @@
     </section>
 
     <header class="topbar glass hidden" id="appHeader">
+    <title>MediFlow OSS - Demo Web</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar glass">
       <div class="brand">
         <img id="brandLogo" src="https://dummyimage.com/40x40/2563eb/ffffff&text=M" alt="Logo" />
         <div>
@@ -33,6 +38,10 @@
     </header>
 
     <main class="layout hidden" id="appMain">
+      <div class="chip" id="sessionRole">Rol activo: super_admin</div>
+    </header>
+
+    <main class="layout">
       <aside class="menu glass">
         <button class="nav-btn active" data-view="dashboard">Dashboard</button>
         <button class="nav-btn" data-view="reception">Recepción + Facturación</button>
@@ -40,6 +49,8 @@
         <button class="nav-btn" data-view="admin" id="adminTab">Admin</button>
         <button class="nav-btn" data-view="patientPortal">Portal Paciente</button>
         <button class="nav-btn" data-view="audit" id="auditTab">Auditoría</button>
+        <button class="nav-btn" data-view="admin">Admin</button>
+        <button class="nav-btn" data-view="patientPortal">Portal Paciente</button>
       </aside>
 
       <section class="view-wrap">
@@ -56,16 +67,42 @@
           </form>
 
           <div class="card"><h3>Estudios</h3><div id="studyOptions" class="checks"></div></div>
+            <label>Nombre completo
+              <input name="name" required placeholder="Pepito Pérez" />
+            </label>
+            <label>Fecha de nacimiento
+              <input name="dob" type="date" required />
+            </label>
+            <label>Cédula (opcional para menor)
+              <input name="document" placeholder="123-0000000-1 o MENOR" />
+            </label>
+            <label>Sucursal
+              <select name="branch" id="patientBranch"></select>
+            </label>
+            <label class="full">Buscar paciente previo (nombre o cédula)
+              <input id="patientLookup" placeholder="Escribe para buscar..." />
+              <small id="patientLookupResult"></small>
+            </label>
+          </form>
+
+          <div class="card">
+            <h3>Estudios</h3>
+            <div id="studyOptions" class="checks"></div>
+          </div>
 
           <div class="grid two">
             <label>Seguro
               <select id="insurancePlan">
                 <option value="none">Particular (0%)</option>
+                <option value="none">Particular (0% cobertura)</option>
                 <option value="basic">Seguro Básico (40%)</option>
                 <option value="premium">Seguro Premium (70%)</option>
               </select>
             </label>
             <label>Pago recibido (DOP)<input id="paymentNow" type="number" min="0" step="0.01" value="0" /></label>
+            <label>Pago recibido ahora (DOP)
+              <input id="paymentNow" type="number" min="0" step="0.01" value="0" />
+            </label>
           </div>
 
           <button id="createInvoiceBtn" class="cta">Crear factura y orden</button>
@@ -84,6 +121,26 @@
             <button id="searchByName" class="ghost">Buscar historial</button>
           </div>
           <label>Escáner universal<input id="scanInput" placeholder="barcode o QR" /></label>
+            <label>ID Factura
+              <input id="searchInvoiceId" placeholder="5021" />
+            </label>
+            <label>Sucursal
+              <select id="searchBranch"></select>
+            </label>
+            <button id="searchByInvoice" class="ghost">Buscar por factura</button>
+          </div>
+
+          <div class="grid two">
+            <label>Buscar por nombre (histórico)
+              <input id="searchPatientName" placeholder="Pepito" />
+            </label>
+            <button id="searchByName" class="ghost">Buscar historial</button>
+          </div>
+
+          <label>Escáner universal (barcode/QR)
+            <input id="scanInput" placeholder="Pega código de barras o token QR" />
+          </label>
+
           <div id="resultOutput" class="result-list"></div>
         </section>
 
@@ -108,6 +165,11 @@
               <label>Rol<select id="newUserRole"></select></label>
               <label>Sucursal<select id="newUserBranch"></select></label>
               <label>Clave temporal<input id="newUserPass" placeholder="Temp1234!" /></label>
+              <label>Nuevo rol<input id="newRoleName" placeholder="doctor" /></label>
+              <button id="addRole">Crear rol</button>
+              <label>Usuario<input id="newUserName" placeholder="maria" /></label>
+              <label>Rol<select id="newUserRole"></select></label>
+              <label>Sucursal<select id="newUserBranch"></select></label>
               <button id="addUser">Crear usuario</button>
               <ul id="userList"></ul>
             </div>
@@ -115,6 +177,8 @@
             <div class="card">
               <h3>Branding</h3>
               <label>Título<input id="brandTitleInput" /></label>
+              <h3>Branding total</h3>
+              <label>Título app<input id="brandTitleInput" /></label>
               <label>Subtítulo<input id="brandSubInput" /></label>
               <label>Logo URL<input id="brandLogoInput" /></label>
               <button id="applyBrand">Aplicar</button>
@@ -133,6 +197,13 @@
           <h2>Auditoría reciente</h2>
           <button id="refreshAudit" class="ghost">Actualizar</button>
           <div id="auditOutput" class="result-list"></div>
+        </section>
+          <h2>Portal de paciente por QR</h2>
+          <label>Token QR
+            <input id="portalQr" placeholder="QR-..." />
+          </label>
+          <button id="portalSearch" class="cta">Consultar resultado</button>
+          <div id="portalOutput"></div>
         </section>
       </section>
     </main>

@@ -7,6 +7,11 @@ import secrets
 import sqlite3
 import threading
 from datetime import datetime, timedelta
+import json
+import os
+import sqlite3
+import threading
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -52,6 +57,8 @@ def verify_password(password: str, stored_hash: str):
     calc = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
     return hmac.compare_digest(calc, digest)
 
+DB_LOCK = threading.Lock()
+
 
 def db_conn():
     conn = sqlite3.connect(DB_PATH)
@@ -76,6 +83,11 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS branches(
+            CREATE TABLE IF NOT EXISTS roles (
+              name TEXT PRIMARY KEY
+            );
+
+            CREATE TABLE IF NOT EXISTS branches (
               id TEXT PRIMARY KEY,
               code TEXT NOT NULL UNIQUE,
               name TEXT NOT NULL,
@@ -83,6 +95,7 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS users(
+            CREATE TABLE IF NOT EXISTS users (
               id TEXT PRIMARY KEY,
               username TEXT NOT NULL UNIQUE,
               role_name TEXT NOT NULL,
@@ -104,6 +117,7 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS studies(
+            CREATE TABLE IF NOT EXISTS studies (
               code TEXT PRIMARY KEY,
               name TEXT NOT NULL,
               price REAL NOT NULL,
@@ -111,6 +125,7 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS patients(
+            CREATE TABLE IF NOT EXISTS patients (
               id TEXT PRIMARY KEY,
               name TEXT NOT NULL,
               dob TEXT NOT NULL,
@@ -119,6 +134,7 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS invoices(
+            CREATE TABLE IF NOT EXISTS invoices (
               id TEXT PRIMARY KEY,
               branch_id TEXT NOT NULL,
               patient_id TEXT NOT NULL,
@@ -148,6 +164,7 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS orders(
+            CREATE TABLE IF NOT EXISTS orders (
               id TEXT PRIMARY KEY,
               invoice_id TEXT NOT NULL,
               branch_id TEXT NOT NULL,
@@ -161,6 +178,7 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS order_items(
+            CREATE TABLE IF NOT EXISTS order_items (
               id TEXT PRIMARY KEY,
               order_id TEXT NOT NULL,
               study_code TEXT NOT NULL,
@@ -209,6 +227,32 @@ def init_db():
                 ("LAB-HEMO", "Hemograma", 500, "LIS"),
                 ("IMG-RXTX", "Rayos X Tórax", 1500, "PACS"),
             ],
+            CREATE TABLE IF NOT EXISTS app_config (
+              key TEXT PRIMARY KEY,
+              value TEXT NOT NULL
+            );
+            """
+        )
+
+        default_roles = ["super_admin", "admin", "recepcion", "doctor", "laboratorio"]
+        cur.executemany("INSERT OR IGNORE INTO roles(name) VALUES(?)", [(r,) for r in default_roles])
+
+        branches = [
+            ("b1", "STO", "Sucursal Santo Domingo", 1),
+            ("b2", "SDE", "Sucursal Este", 1),
+        ]
+        cur.executemany(
+            "INSERT OR IGNORE INTO branches(id, code, name, active) VALUES(?,?,?,?)", branches
+        )
+
+        studies = [
+            ("LAB-ORINA", "Orina", 450, "LIS"),
+            ("LAB-COPRO", "Coprológico", 650, "LIS"),
+            ("LAB-HEMO", "Hemograma", 500, "LIS"),
+            ("IMG-RXTX", "Rayos X Tórax", 1500, "PACS"),
+        ]
+        cur.executemany(
+            "INSERT OR IGNORE INTO studies(code,name,price,department) VALUES(?,?,?,?)", studies
         )
 
         brand = {
@@ -239,9 +283,20 @@ def init_db():
                     now_iso(),
                 ),
             )
+            "INSERT OR IGNORE INTO app_config(key,value) VALUES('brand',?)", (json.dumps(brand),)
+        )
+
+        cur.execute(
+            "INSERT OR IGNORE INTO users(id,username,role_name,branch_id,created_at) VALUES(?,?,?,?,?)",
+            (str(uuid4()), "root", "super_admin", "b1", now_iso()),
+        )
 
         conn.commit()
         conn.close()
+
+
+def now_iso():
+    return datetime.utcnow().isoformat() + "Z"
 
 
 def json_response(handler, data, status=200):
@@ -259,6 +314,11 @@ def parse_body(handler):
     try:
         return json.loads(raw.decode("utf-8"))
     except Exception:
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError:
         return {}
 
 
@@ -276,6 +336,11 @@ def generate_invoice_number(cur, branch_id):
         if not row:
             return candidate
     raise RuntimeError("No hay IDs disponibles")
+    raise RuntimeError("No hay IDs de factura disponibles para la sucursal")
+
+
+def random_token(prefix):
+    return f"{prefix}-{uuid4()}"
 
 
 def fetch_brand(cur):
@@ -310,16 +375,23 @@ def order_to_payload(cur, order_row):
     patient = cur.execute("SELECT * FROM patients WHERE id=?", (order_row["patient_id"],)).fetchone()
     branch = cur.execute("SELECT * FROM branches WHERE id=?", (order_row["branch_id"],)).fetchone()
     items = cur.execute("SELECT * FROM order_items WHERE order_id=?", (order_row["id"],)).fetchall()
+
     return {
         "order_id": order_row["id"],
         "invoice_id": invoice["id"],
         "invoice_number": invoice["branch_invoice_number"],
         "patient": {"id": patient["id"], "name": patient["name"], "document": patient["document"]},
+        "patient": {
+            "id": patient["id"],
+            "name": patient["name"],
+            "document": patient["document"],
+        },
         "branch": {"id": branch["id"], "code": branch["code"], "name": branch["name"]},
         "barcode": order_row["barcode"],
         "qr_token": order_row["qr_token"],
         "balance": invoice["balance"],
         "status": invoice["status"],
+        "created_at": order_row["created_at"],
         "items": [
             {
                 "code": item["study_code"],
@@ -436,6 +508,11 @@ class Handler(BaseHTTPRequestHandler):
                 invoice_count = cur.execute("SELECT COUNT(*) as c FROM invoices").fetchone()["c"]
                 patient_count = cur.execute("SELECT COUNT(*) as c FROM patients").fetchone()["c"]
                 unpaid_count = cur.execute("SELECT COUNT(*) as c FROM invoices WHERE balance > 0").fetchone()["c"]
+                invoice_count = cur.execute("SELECT COUNT(*) as c FROM invoices").fetchone()["c"]
+                patient_count = cur.execute("SELECT COUNT(*) as c FROM patients").fetchone()["c"]
+                unpaid_count = cur.execute(
+                    "SELECT COUNT(*) as c FROM invoices WHERE balance > 0"
+                ).fetchone()["c"]
                 recent = [
                     dict(r)
                     for r in cur.execute(
@@ -451,6 +528,11 @@ class Handler(BaseHTTPRequestHandler):
                 ]
                 user = auth["user"]
                 conn.close()
+                        ORDER BY i.created_at DESC
+                        LIMIT 8
+                        """
+                    ).fetchall()
+                ]
                 return json_response(
                     self,
                     {
@@ -494,6 +576,20 @@ class Handler(BaseHTTPRequestHandler):
                 if not self.require_permission(auth, "results:view"):
                     conn.close()
                     return json_response(self, {"error": "Sin permiso"}, 403)
+                q = (qs.get("q", [""])[0]).strip().lower()
+                if not q:
+                    return json_response(self, {"items": []})
+                rows = cur.execute(
+                    """
+                    SELECT * FROM patients
+                    WHERE lower(name) LIKE ? OR lower(document) LIKE ?
+                    ORDER BY created_at DESC LIMIT 10
+                    """,
+                    (f"%{q}%", f"%{q}%"),
+                ).fetchall()
+                return json_response(self, {"items": [dict(r) for r in rows]})
+
+            if parsed.path == "/api/results/by-invoice":
                 branch_id = qs.get("branch_id", [""])[0]
                 invoice_number = qs.get("invoice_number", [""])[0]
                 invoice = cur.execute(
@@ -516,6 +612,19 @@ class Handler(BaseHTTPRequestHandler):
                     """
                     SELECT o.* FROM orders o
                     JOIN patients p ON p.id=o.patient_id
+                    return json_response(self, {"item": None})
+                order = cur.execute("SELECT * FROM orders WHERE invoice_id=?", (invoice["id"],)).fetchone()
+                if not order:
+                    return json_response(self, {"item": None})
+                return json_response(self, {"item": order_to_payload(cur, order)})
+
+            if parsed.path == "/api/results/by-name":
+                q = qs.get("name", [""])[0].strip().lower()
+                rows = cur.execute(
+                    """
+                    SELECT o.*
+                    FROM orders o
+                    JOIN patients p ON p.id = o.patient_id
                     WHERE lower(p.name) LIKE ?
                     ORDER BY o.created_at DESC
                     """,
@@ -545,6 +654,18 @@ class Handler(BaseHTTPRequestHandler):
 
             conn.close()
             return json_response(self, {"error": "Not found"}, 404)
+                return json_response(self, {"items": [order_to_payload(cur, r) for r in rows]})
+
+            if parsed.path == "/api/results/by-token":
+                token = qs.get("token", [""])[0].strip()
+                row = cur.execute(
+                    "SELECT * FROM orders WHERE barcode=? OR qr_token=?", (token, token)
+                ).fetchone()
+                return json_response(self, {"item": order_to_payload(cur, row) if row else None})
+
+            conn.close()
+
+        return json_response(self, {"error": "Not found"}, 404)
 
     def handle_api_post(self, parsed):
         payload = parse_body(self)
@@ -624,11 +745,13 @@ class Handler(BaseHTTPRequestHandler):
                 if not self.require_permission(auth, "billing:create"):
                     conn.close()
                     return json_response(self, {"error": "Sin permiso"}, 403)
+            if parsed.path == "/api/invoices/create":
                 try:
                     name = payload.get("name", "").strip()
                     dob = payload.get("dob", "").strip()
                     document = payload.get("document", "").strip() or "MENOR"
                     branch_id = payload.get("branch_id", "").strip() or user["branch_id"]
+                    branch_id = payload.get("branch_id", "").strip()
                     study_codes = payload.get("study_codes", [])
                     insurance_plan = payload.get("insurance_plan", "none")
                     payment = float(payload.get("payment", 0))
@@ -642,6 +765,8 @@ class Handler(BaseHTTPRequestHandler):
                     ).fetchone()
                     patient_id = patient["id"] if patient else str(uuid4())
                     if not patient:
+                    if not patient:
+                        patient_id = str(uuid4())
                         cur.execute(
                             "INSERT INTO patients(id,name,dob,document,created_at) VALUES(?,?,?,?,?)",
                             (patient_id, name, dob, document, now_iso()),
@@ -649,6 +774,11 @@ class Handler(BaseHTTPRequestHandler):
 
                     studies = cur.execute(
                         f"SELECT * FROM studies WHERE code IN ({','.join(['?'] * len(study_codes))})",
+                    else:
+                        patient_id = patient["id"]
+
+                    studies = cur.execute(
+                        f"SELECT * FROM studies WHERE code IN ({','.join(['?']*len(study_codes))})",
                         study_codes,
                     ).fetchall()
                     if not studies:
@@ -667,6 +797,8 @@ class Handler(BaseHTTPRequestHandler):
                         """
                         INSERT INTO invoices(id,branch_id,patient_id,branch_invoice_number,insurance_plan,gross,coverage,total,payment,balance,status,created_at)
                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                        INSERT INTO invoices(id,branch_id,patient_id,branch_invoice_number,insurance_plan,gross,coverage,total,payment,balance,created_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?)
                         """,
                         (
                             invoice_id,
@@ -693,6 +825,9 @@ class Handler(BaseHTTPRequestHandler):
                     order_id = str(uuid4())
                     barcode = f"BC-{uuid4()}"
                     qr_token = f"QR-{uuid4()}"
+                    order_id = str(uuid4())
+                    barcode = random_token("BC")
+                    qr_token = random_token("QR")
                     cur.execute(
                         "INSERT INTO orders(id,invoice_id,branch_id,patient_id,barcode,qr_token,created_at) VALUES(?,?,?,?,?,?,?)",
                         (order_id, invoice_id, branch_id, patient_id, barcode, qr_token, created_at),
@@ -701,6 +836,10 @@ class Handler(BaseHTTPRequestHandler):
                     for s in studies:
                         cur.execute(
                             "INSERT INTO order_items(id,order_id,study_code,study_name,department,status,result_text) VALUES(?,?,?,?,?,?,?)",
+                            """
+                            INSERT INTO order_items(id,order_id,study_code,study_name,department,status,result_text)
+                            VALUES(?,?,?,?,?,?,?)
+                            """,
                             (
                                 str(uuid4()),
                                 order_id,
@@ -781,6 +920,7 @@ class Handler(BaseHTTPRequestHandler):
                 ):
                     conn.close()
                     return json_response(self, {"error": "Sin permiso"}, 403)
+            if parsed.path == "/api/results/release-check":
                 order_id = payload.get("order_id", "").strip()
                 row = cur.execute("SELECT invoice_id FROM orders WHERE id=?", (order_id,)).fetchone()
                 if not row:
@@ -789,6 +929,8 @@ class Handler(BaseHTTPRequestHandler):
                 invoice = cur.execute("SELECT balance FROM invoices WHERE id=?", (row["invoice_id"],)).fetchone()
                 if invoice["balance"] > 0:
                     conn.close()
+                conn.close()
+                if invoice["balance"] > 0:
                     return json_response(
                         self,
                         {
@@ -805,6 +947,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not self.require_permission(auth, "admin:manage"):
                     conn.close()
                     return json_response(self, {"error": "Sin permiso"}, 403)
+                return json_response(self, {"ok": True, "message": "Entrega autorizada."})
+
+            if parsed.path == "/api/admin/branch":
                 name = payload.get("name", "").strip()
                 code = payload.get("code", "").strip().upper()
                 if not name or not code:
@@ -817,6 +962,10 @@ class Handler(BaseHTTPRequestHandler):
                         (branch_id, code, name),
                     )
                     audit(cur, user["id"], "admin.branch_created", "branch", branch_id)
+                    cur.execute(
+                        "INSERT INTO branches(id,code,name,active) VALUES(?,?,?,1)",
+                        (str(uuid4()), code, name),
+                    )
                     conn.commit()
                     conn.close()
                     return json_response(self, {"ok": True}, 201)
@@ -831,6 +980,7 @@ class Handler(BaseHTTPRequestHandler):
                     return json_response(self, {"error": "Sin permiso"}, 403)
                 role = payload.get("name", "").strip().lower()
                 permissions = payload.get("permissions", [])
+                role = payload.get("name", "").strip().lower()
                 if not role:
                     conn.close()
                     return json_response(self, {"error": "Rol requerido"}, 400)
@@ -854,6 +1004,9 @@ class Handler(BaseHTTPRequestHandler):
                 role = payload.get("role", "").strip().lower()
                 branch_id = payload.get("branch_id", "").strip()
                 temp_password = payload.get("temp_password", "Temp1234!").strip()
+                username = payload.get("username", "").strip()
+                role = payload.get("role", "").strip().lower()
+                branch_id = payload.get("branch_id", "").strip()
                 if not username or not role:
                     conn.close()
                     return json_response(self, {"error": "Usuario y rol requeridos"}, 400)
@@ -879,6 +1032,13 @@ class Handler(BaseHTTPRequestHandler):
                     conn.commit()
                     conn.close()
                     return json_response(self, {"ok": True, "temp_password": temp_password}, 201)
+                    cur.execute(
+                        "INSERT INTO users(id,username,role_name,branch_id,created_at) VALUES(?,?,?,?,?)",
+                        (str(uuid4()), username, role, branch_id or None, now_iso()),
+                    )
+                    conn.commit()
+                    conn.close()
+                    return json_response(self, {"ok": True}, 201)
                 except sqlite3.IntegrityError:
                     conn.rollback()
                     conn.close()
@@ -904,6 +1064,12 @@ class Handler(BaseHTTPRequestHandler):
 
             conn.close()
             return json_response(self, {"error": "Not found"}, 404)
+                conn.commit()
+                conn.close()
+                return json_response(self, {"ok": True}, 201)
+
+            conn.close()
+        return json_response(self, {"error": "Not found"}, 404)
 
 
 def run_server(port=8080):
@@ -911,8 +1077,11 @@ def run_server(port=8080):
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"MediFlow running on http://localhost:{port}")
     print("Usuario inicial: root | contraseña inicial: root1234!")
+    print(f"MediFlow server running on http://localhost:{port}")
     server.serve_forever()
 
 
 if __name__ == "__main__":
     run_server(int(os.environ.get("PORT", "8080")))
+    port = int(os.environ.get("PORT", "8080"))
+    run_server(port)
