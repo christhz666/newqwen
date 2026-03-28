@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MediFlow OSS</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <section id="loginScreen" class="login-screen">
+      <form id="loginForm" class="login-card glass">
+        <h2>Iniciar sesión</h2>
+        <p>Usuario inicial: <b>root</b> · Contraseña inicial: <b>root1234!</b></p>
+        <label>Usuario<input id="loginUser" value="root" required /></label>
+        <label>Contraseña<input id="loginPass" type="password" value="root1234!" required /></label>
+        <button class="cta" type="submit">Entrar</button>
+        <small id="loginMsg"></small>
+      </form>
+    </section>
+
+    <header class="topbar glass hidden" id="appHeader">
+      <div class="brand">
+        <img id="brandLogo" src="https://dummyimage.com/40x40/2563eb/ffffff&text=M" alt="Logo" />
+        <div>
+          <h1 id="brandTitle">MediFlow OSS</h1>
+          <p id="brandSubtitle">Hospital Core · LIS · PACS · Billing</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div class="chip" id="sessionRole">Rol activo: -</div>
+        <button id="logoutBtn" class="ghost">Salir</button>
+      </div>
+    </header>
+
+    <main class="layout hidden" id="appMain">
+      <aside class="menu glass">
+        <button class="nav-btn active" data-view="dashboard">Dashboard</button>
+        <button class="nav-btn" data-view="reception">Recepción + Facturación</button>
+        <button class="nav-btn" data-view="results">Resultados</button>
+        <button class="nav-btn" data-view="admin" id="adminTab">Admin</button>
+        <button class="nav-btn" data-view="patientPortal">Portal Paciente</button>
+        <button class="nav-btn" data-view="audit" id="auditTab">Auditoría</button>
+      </aside>
+
+      <section class="view-wrap">
+        <section id="dashboard" class="view active glass"></section>
+
+        <section id="reception" class="view glass">
+          <h2>Registro de paciente → Estudios → Facturación</h2>
+          <form id="patientForm" class="grid two">
+            <label>Nombre completo<input name="name" required placeholder="Pepito Pérez" /></label>
+            <label>Fecha de nacimiento<input name="dob" type="date" required /></label>
+            <label>Cédula (opcional para menor)<input name="document" placeholder="123... o MENOR" /></label>
+            <label>Sucursal<select name="branch" id="patientBranch"></select></label>
+            <label class="full">Buscar paciente previo<input id="patientLookup" placeholder="nombre o cédula" /><small id="patientLookupResult"></small></label>
+          </form>
+
+          <div class="card"><h3>Estudios</h3><div id="studyOptions" class="checks"></div></div>
+
+          <div class="grid two">
+            <label>Seguro
+              <select id="insurancePlan">
+                <option value="none">Particular (0%)</option>
+                <option value="basic">Seguro Básico (40%)</option>
+                <option value="premium">Seguro Premium (70%)</option>
+              </select>
+            </label>
+            <label>Pago recibido (DOP)<input id="paymentNow" type="number" min="0" step="0.01" value="0" /></label>
+          </div>
+
+          <button id="createInvoiceBtn" class="cta">Crear factura y orden</button>
+          <pre id="invoiceOutput" class="output"></pre>
+        </section>
+
+        <section id="results" class="view glass">
+          <h2>Entrega de resultados</h2>
+          <div class="grid three">
+            <label>ID Factura<input id="searchInvoiceId" placeholder="5021" /></label>
+            <label>Sucursal<select id="searchBranch"></select></label>
+            <button id="searchByInvoice" class="ghost">Buscar por factura</button>
+          </div>
+          <div class="grid two">
+            <label>Buscar por nombre<input id="searchPatientName" placeholder="Pepito" /></label>
+            <button id="searchByName" class="ghost">Buscar historial</button>
+          </div>
+          <label>Escáner universal<input id="scanInput" placeholder="barcode o QR" /></label>
+          <div id="resultOutput" class="result-list"></div>
+        </section>
+
+        <section id="admin" class="view glass">
+          <h2>Configuración global</h2>
+          <div class="grid three">
+            <div class="card">
+              <h3>Sucursales</h3>
+              <label>Nombre<input id="newBranchName" /></label>
+              <label>Código<input id="newBranchCode" placeholder="STO" /></label>
+              <button id="addBranch">Crear sucursal</button>
+              <ul id="branchList"></ul>
+            </div>
+
+            <div class="card">
+              <h3>Roles y usuarios</h3>
+              <label>Nuevo rol<input id="newRoleName" placeholder="doctor_externo" /></label>
+              <label>Permisos CSV<input id="newRolePerms" placeholder="results:view,results:release" /></label>
+              <button id="addRole">Guardar rol</button>
+              <hr />
+              <label>Usuario<input id="newUserName" placeholder="maria" /></label>
+              <label>Rol<select id="newUserRole"></select></label>
+              <label>Sucursal<select id="newUserBranch"></select></label>
+              <label>Clave temporal<input id="newUserPass" placeholder="Temp1234!" /></label>
+              <button id="addUser">Crear usuario</button>
+              <ul id="userList"></ul>
+            </div>
+
+            <div class="card">
+              <h3>Branding</h3>
+              <label>Título<input id="brandTitleInput" /></label>
+              <label>Subtítulo<input id="brandSubInput" /></label>
+              <label>Logo URL<input id="brandLogoInput" /></label>
+              <button id="applyBrand">Aplicar</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="patientPortal" class="view glass">
+          <h2>Portal paciente por QR</h2>
+          <label>Token QR<input id="portalQr" placeholder="QR-..." /></label>
+          <button id="portalSearch" class="cta">Consultar resultado</button>
+          <div id="portalOutput"></div>
+        </section>
+
+        <section id="audit" class="view glass">
+          <h2>Auditoría reciente</h2>
+          <button id="refreshAudit" class="ghost">Actualizar</button>
+          <div id="auditOutput" class="result-list"></div>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="printDialog">
+      <h3>Entrega rápida por escáner</h3>
+      <p id="printDialogText"></p>
+      <menu>
+        <button id="previewBtn">Vista previa</button>
+        <button id="printBtn">Imprimir</button>
+        <button id="closeDialog">Cerrar</button>
+      </menu>
+    </dialog>
+
+    <script src="app.js"></script>
+  </body>
+</html>

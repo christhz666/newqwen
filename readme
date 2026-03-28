@@ -1,1 +1,33 @@
-hi 
+# MediFlow OSS (funcional y ampliado)
+
+Ahora el sistema incluye backend con persistencia, autenticación por sesión, permisos por rol, pagos parciales, bloqueo de entrega por deuda y auditoría.
+
+## Funcionalidades clave
+
+- Login/logout con sesión (`X-Session-Token`) y usuario inicial bootstrap.
+- Roles y permisos persistentes (`role_permissions`).
+- Facturación por sucursal con ID 4–5 dígitos único por sucursal.
+- Registro de pagos (cash/card/paypal) y recalculo de balance.
+- Resultados ligados a factura/orden + bloqueo de entrega si hay deuda.
+- Búsqueda por factura+sucursal, nombre o token (QR/barcode).
+- Auditoría de eventos críticos (login, facturación, pagos, liberación, admin).
+
+## Ejecutar
+
+```bash
+python3 server.py
+```
+
+Abrir: `http://localhost:8080`
+
+### Credenciales iniciales
+
+- Usuario: `root`
+- Contraseña: `root1234!`
+
+## Archivos
+
+- `server.py`: API REST, auth, permisos, auditoría, SQLite.
+- `web/index.html`: interfaz completa con login + módulos.
+- `web/app.js`: lógica cliente consumiendo API.
+- `web/styles.css`: UI responsive.
